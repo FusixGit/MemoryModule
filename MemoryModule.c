@@ -22,13 +22,16 @@
  * Portions created by Joachim Bauch are Copyright (C) 2004-2015
  * Joachim Bauch. All Rights Reserved.
  *
+ * 2016 fixed by Fusix
  */
 
+#include "stdafx.h"
 #include <windows.h>
 #include <winnt.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <tchar.h>
+#include <malloc.h>
 #ifdef DEBUG_OUTPUT
 #include <stdio.h>
 #endif
@@ -44,13 +47,24 @@
 #endif
 
 #include "MemoryModule.h"
+#include "MemoryVirtual.h"
+#include "nt.h"
 
 typedef BOOL (WINAPI *DllEntryProc)(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved);
 typedef int (WINAPI *ExeEntryProc)(void);
 
-typedef struct {
+extern HMODULE hVirtualModule;
+extern char sVirtualModuleName;
+
+typedef struct
+{
     PIMAGE_NT_HEADERS headers;
-    unsigned char *codeBase;
+	#ifdef _WIN64
+    ULONGLONG OriginalImageBase;
+	#else
+	DWORD OriginalImageBase;
+	#endif
+	unsigned char *codeBase;
     HCUSTOMMODULE *modules;
     int numModules;
     BOOL initialized;
@@ -62,6 +76,10 @@ typedef struct {
     void *userdata;
     ExeEntryProc exeEntry;
     DWORD pageSize;
+	int *CustomArgc;
+	char *** CustomArgv;
+	int *CustomWArgc;
+	char *** CustomWArgv;
 } MEMORYMODULE, *PMEMORYMODULE;
 
 typedef struct {
@@ -109,17 +127,21 @@ CopySections(const unsigned char *data, size_t size, PIMAGE_NT_HEADERS old_heade
     unsigned char *codeBase = module->codeBase;
     unsigned char *dest;
     PIMAGE_SECTION_HEADER section = IMAGE_FIRST_SECTION(module->headers);
-    for (i=0; i<module->headers->FileHeader.NumberOfSections; i++, section++) {
-        if (section->SizeOfRawData == 0) {
+    for (i=0; i<module->headers->FileHeader.NumberOfSections; i++, section++) 
+	{
+        if (section->SizeOfRawData == 0) 
+		{
             // section doesn't contain data in the dll itself, but may define
             // uninitialized data
             section_size = old_headers->OptionalHeader.SectionAlignment;
-            if (section_size > 0) {
+            if (section_size > 0)
+			{
                 dest = (unsigned char *)VirtualAlloc(codeBase + section->VirtualAddress,
                     section_size,
                     MEM_COMMIT,
                     PAGE_READWRITE);
-                if (dest == NULL) {
+                if (dest == NULL) 
+				{
                     return FALSE;
                 }
 
@@ -217,7 +239,8 @@ FinalizeSection(PMEMORYMODULE module, PSECTIONFINALIZEDATA sectionData) {
     }
 
     // change memory access flags
-    if (VirtualProtect(sectionData->address, sectionData->size, protect, &oldProtect) == 0) {
+    if (VirtualProtect(sectionData->address, sectionData->size, protect, &oldProtect) == 0) 
+	{
 #ifdef DEBUG_OUTPUT
         OutputLastError("Error protecting memory page")
 #endif
@@ -246,25 +269,31 @@ FinalizeSections(PMEMORYMODULE module)
     section++;
 
     // loop through all sections and change access flags
-    for (i=1; i<module->headers->FileHeader.NumberOfSections; i++, section++) {
+    for (i=1; i<module->headers->FileHeader.NumberOfSections; i++, section++) 
+	{
         LPVOID sectionAddress = (LPVOID)((uintptr_t)section->Misc.PhysicalAddress | imageOffset);
         LPVOID alignedAddress = ALIGN_DOWN(sectionAddress, module->pageSize);
         DWORD sectionSize = GetRealSectionSize(module, section);
         // Combine access flags of all sections that share a page
         // TODO(fancycode): We currently share flags of a trailing large section
         //   with the page of a first small section. This should be optimized.
-        if (sectionData.alignedAddress == alignedAddress || (uintptr_t) sectionData.address + sectionData.size > (uintptr_t) alignedAddress) {
+        if (sectionData.alignedAddress == alignedAddress || (uintptr_t) sectionData.address + sectionData.size > (uintptr_t) alignedAddress) 
+		{
             // Section shares page with previous
-            if ((section->Characteristics & IMAGE_SCN_MEM_DISCARDABLE) == 0 || (sectionData.characteristics & IMAGE_SCN_MEM_DISCARDABLE) == 0) {
+            if ((section->Characteristics & IMAGE_SCN_MEM_DISCARDABLE) == 0 || (sectionData.characteristics & IMAGE_SCN_MEM_DISCARDABLE) == 0) 
+			{
                 sectionData.characteristics = (sectionData.characteristics | section->Characteristics) & ~IMAGE_SCN_MEM_DISCARDABLE;
-            } else {
+            } 
+			else 
+			{
                 sectionData.characteristics |= section->Characteristics;
             }
             sectionData.size = (((uintptr_t)sectionAddress) + sectionSize) - (uintptr_t) sectionData.address;
             continue;
         }
 
-        if (!FinalizeSection(module, &sectionData)) {
+        if (!FinalizeSection(module, &sectionData)) 
+		{
             return FALSE;
         }
         sectionData.address = sectionAddress;
@@ -273,7 +302,8 @@ FinalizeSections(PMEMORYMODULE module)
         sectionData.characteristics = section->Characteristics;
     }
     sectionData.last = TRUE;
-    if (!FinalizeSection(module, &sectionData)) {
+    if (!FinalizeSection(module, &sectionData)) 
+	{
         return FALSE;
     }
 #ifndef _WIN64
@@ -285,21 +315,33 @@ FinalizeSections(PMEMORYMODULE module)
 static BOOL
 ExecuteTLS(PMEMORYMODULE module)
 {
+	return true;
     unsigned char *codeBase = module->codeBase;
     PIMAGE_TLS_DIRECTORY tls;
     PIMAGE_TLS_CALLBACK* callback;
 
     PIMAGE_DATA_DIRECTORY directory = GET_HEADER_DICTIONARY(module, IMAGE_DIRECTORY_ENTRY_TLS);
-    if (directory->VirtualAddress == 0) {
+    if (directory->VirtualAddress == 0) 
+	{
         return TRUE;
     }
 
     tls = (PIMAGE_TLS_DIRECTORY) (codeBase + directory->VirtualAddress);
-    callback = (PIMAGE_TLS_CALLBACK *) tls->AddressOfCallBacks;
-    if (callback) {
-        while (*callback) {
-            (*callback)((LPVOID) codeBase, DLL_PROCESS_ATTACH, NULL);
-            callback++;
+	tls->StartAddressOfRawData = (DWORD)(codeBase+(tls->StartAddressOfRawData-module->OriginalImageBase));
+	tls->EndAddressOfRawData = (DWORD)(codeBase+(tls->EndAddressOfRawData-module->OriginalImageBase));
+	tls->AddressOfIndex = (DWORD)(codeBase+(tls->AddressOfIndex-module->OriginalImageBase));
+	tls->AddressOfCallBacks = (DWORD)(codeBase+(tls->AddressOfCallBacks-module->OriginalImageBase));
+
+	callback = (PIMAGE_TLS_CALLBACK *)tls->AddressOfCallBacks;
+	if (callback) 
+	{
+        while (*callback) 
+		{
+			*callback = (PIMAGE_TLS_CALLBACK)(codeBase+(((DWORD)*callback)-module->OriginalImageBase));
+			if(IsBadCodePtr((FARPROC)(*callback))) continue;
+
+			(*callback)((LPVOID) codeBase, DLL_PROCESS_ATTACH, NULL);
+	        callback++;
         }
     }
     return TRUE;
@@ -312,8 +354,10 @@ PerformBaseRelocation(PMEMORYMODULE module, ptrdiff_t delta)
     PIMAGE_BASE_RELOCATION relocation;
 
     PIMAGE_DATA_DIRECTORY directory = GET_HEADER_DICTIONARY(module, IMAGE_DIRECTORY_ENTRY_BASERELOC);
-    if (directory->Size == 0) {
+    if (directory->Size == 0) 
+	{
         return (delta == 0);
+
     }
 
     relocation = (PIMAGE_BASE_RELOCATION) (codeBase + directory->VirtualAddress);
@@ -321,7 +365,8 @@ PerformBaseRelocation(PMEMORYMODULE module, ptrdiff_t delta)
         DWORD i;
         unsigned char *dest = codeBase + relocation->VirtualAddress;
         unsigned short *relInfo = (unsigned short *)((unsigned char *)relocation + IMAGE_SIZEOF_BASE_RELOCATION);
-        for (i=0; i<((relocation->SizeOfBlock-IMAGE_SIZEOF_BASE_RELOCATION) / 2); i++, relInfo++) {
+        for (i=0; i<((relocation->SizeOfBlock-IMAGE_SIZEOF_BASE_RELOCATION) / 2); i++, relInfo++) 
+		{
             DWORD *patchAddrHL;
 #ifdef _WIN64
             ULONGLONG *patchAddr64;
@@ -377,12 +422,14 @@ BuildImportTable(PMEMORYMODULE module)
     }
 
     importDesc = (PIMAGE_IMPORT_DESCRIPTOR) (codeBase + directory->VirtualAddress);
-    for (; !IsBadReadPtr(importDesc, sizeof(IMAGE_IMPORT_DESCRIPTOR)) && importDesc->Name; importDesc++) {
+    for (; !IsBadReadPtr(importDesc, sizeof(IMAGE_IMPORT_DESCRIPTOR)) && importDesc->Name; importDesc++) 
+	{
         uintptr_t *thunkRef;
         FARPROC *funcRef;
         HCUSTOMMODULE *tmp;
         HCUSTOMMODULE handle = module->loadLibrary((LPCSTR) (codeBase + importDesc->Name), module->userdata);
-        if (handle == NULL) {
+        if (handle == NULL) 
+		{
             SetLastError(ERROR_MOD_NOT_FOUND);
             result = FALSE;
             break;
@@ -406,20 +453,26 @@ BuildImportTable(PMEMORYMODULE module)
             thunkRef = (uintptr_t *) (codeBase + importDesc->FirstThunk);
             funcRef = (FARPROC *) (codeBase + importDesc->FirstThunk);
         }
-        for (; *thunkRef; thunkRef++, funcRef++) {
-            if (IMAGE_SNAP_BY_ORDINAL(*thunkRef)) {
-                *funcRef = module->getProcAddress(handle, (LPCSTR)IMAGE_ORDINAL(*thunkRef), module->userdata);
-            } else {
+        for (; *thunkRef; thunkRef++, funcRef++) 
+		{
+            if (IMAGE_SNAP_BY_ORDINAL(*thunkRef)) 
+			{
+                *funcRef = module->getProcAddress(handle, (LPCSTR)IMAGE_ORDINAL(*thunkRef), module);
+            } 
+			else 
+			{
                 PIMAGE_IMPORT_BY_NAME thunkData = (PIMAGE_IMPORT_BY_NAME) (codeBase + (*thunkRef));
-                *funcRef = module->getProcAddress(handle, (LPCSTR)&thunkData->Name, module->userdata);
+                *funcRef = module->getProcAddress(handle, (LPCSTR)&thunkData->Name, module);
             }
-            if (*funcRef == 0) {
+            if (*funcRef == 0) 
+			{
                 result = FALSE;
                 break;
             }
         }
 
-        if (!result) {
+        if (!result) 
+		{
             module->freeLibrary(handle, module->userdata);
             SetLastError(ERROR_PROC_NOT_FOUND);
             break;
@@ -434,17 +487,46 @@ HCUSTOMMODULE MemoryDefaultLoadLibrary(LPCSTR filename, void *userdata)
     HMODULE result;
     UNREFERENCED_PARAMETER(userdata);
     result = LoadLibraryA(filename);
-    if (result == NULL) {
-        return NULL;
-    }
-
     return (HCUSTOMMODULE) result;
 }
 
-FARPROC MemoryDefaultGetProcAddress(HCUSTOMMODULE module, LPCSTR name, void *userdata)
+FARPROC MemoryDefaultGetProcAddress(HCUSTOMMODULE module, LPCSTR name, void* hMemoryModule)
 {
-    UNREFERENCED_PARAMETER(userdata);
-    return (FARPROC) GetProcAddress((HMODULE) module, name);
+	if(memcmp(name, "GetModuleHandleEx", 17) == 0)	// A & W
+	{
+		return (FARPROC) Virtual_GetModuleHandleEx;
+	}	
+	if(memcmp(name, "GetModuleHandle", 15) == 0)	// A & W
+	{
+		return (FARPROC) Virtual_GetModuleHandle;
+	}
+	if(memcmp(name, "GetCommandLineA", 15) == 0)
+	{
+		return (FARPROC) Virtual_GetCommandLineA;
+	}	
+	if(memcmp(name, "GetCommandLineW", 15) == 0)
+	{
+		return (FARPROC) Virtual_GetCommandLineW;
+	}
+	if(memcmp(name, "__getmainargs", 13) == 0)
+	{
+		return (FARPROC)Virtual_getmainargs;
+	}	
+	if(memcmp(name, "__wgetmainargs", 14) == 0)
+	{
+		return (FARPROC)Virtual_wgetmainargs;
+	}	
+	if(memcmp(name, "__argc", 6) == 0)
+	{
+		MEMORYMODULE *Module = (MEMORYMODULE*)hMemoryModule;
+		return (FARPROC)&Module->CustomArgc;
+	}	
+	if(memcmp(name, "__argv", 6) == 0)
+	{
+		MEMORYMODULE *Module = (MEMORYMODULE*)hMemoryModule;
+		return (FARPROC)&Module->CustomArgv;	
+	}
+    return (FARPROC)GetProcAddress((HMODULE)module, name);
 }
 
 void MemoryDefaultFreeLibrary(HCUSTOMMODULE module, void *userdata)
@@ -456,6 +538,45 @@ void MemoryDefaultFreeLibrary(HCUSTOMMODULE module, void *userdata)
 HMEMORYMODULE MemoryLoadLibrary(const void *data, size_t size)
 {
     return MemoryLoadLibraryEx(data, size, MemoryDefaultLoadLibrary, MemoryDefaultGetProcAddress, MemoryDefaultFreeLibrary, NULL);
+}
+
+bool TryFreeVirtualMemory(LPVOID Addr, unsigned int Size, bool force)
+{	
+	MEMORY_BASIC_INFORMATION iMem;
+	DWORD dwCurrAddress = 0;
+	DWORD dwAllocated = 0;
+	bool res = false;
+
+	dwCurrAddress = (DWORD)Addr;
+	
+	res = VirtualQuery((LPVOID)dwCurrAddress, &iMem, sizeof(iMem)); 
+	if(iMem.State != MEM_FREE)
+	{
+		res = VirtualFree((LPVOID)iMem.AllocationBase, iMem.RegionSize, MEM_DECOMMIT);
+		res = VirtualFree((LPVOID)iMem.AllocationBase, 0, MEM_RELEASE);
+	}
+	if(iMem.RegionSize < Size)
+	{
+		dwCurrAddress += iMem.RegionSize;
+	}
+	res = VirtualQuery((LPVOID)dwCurrAddress, &iMem, sizeof(iMem)); 
+
+	if(iMem.State != MEM_FREE)
+	{		
+		res = VirtualFree((LPVOID)iMem.AllocationBase, iMem.RegionSize, MEM_DECOMMIT);
+		res = VirtualFree((LPVOID)iMem.AllocationBase, 0, MEM_RELEASE);
+		res = VirtualQuery((LPVOID)dwCurrAddress, &iMem, sizeof(iMem)); 
+	}
+	res = VirtualQuery((LPVOID)dwCurrAddress, &iMem, sizeof(iMem)); 
+	if(iMem.State != MEM_FREE)
+	{		
+		res = VirtualFree((LPVOID)iMem.AllocationBase, iMem.RegionSize, MEM_DECOMMIT);
+		res = VirtualFree((LPVOID)iMem.AllocationBase, 0, MEM_RELEASE);
+		res = VirtualQuery((LPVOID)dwCurrAddress, &iMem, sizeof(iMem)); 
+	}
+
+	res = VirtualQuery((LPVOID)Addr, &iMem, sizeof(iMem));
+	return true;
 }
 
 HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size,
@@ -540,13 +661,18 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size,
         MEM_RESERVE | MEM_COMMIT,
         PAGE_READWRITE);
 
-    if (code == NULL) {
+    if (code == NULL) 
+	{
+
+		TryFreeVirtualMemory((LPVOID)0x00400000, alignedImageSize, true);
+
         // try to allocate memory at arbitrary position
         code = (unsigned char *)VirtualAlloc(NULL,
             alignedImageSize,
             MEM_RESERVE | MEM_COMMIT,
             PAGE_READWRITE);
-        if (code == NULL) {
+        if (code == NULL) 
+		{
             SetLastError(ERROR_OUTOFMEMORY);
             return NULL;
         }
@@ -558,6 +684,9 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size,
         SetLastError(ERROR_OUTOFMEMORY);
         return NULL;
     }
+
+	// FixLetter
+	hVirtualModule = (HMODULE)code;
 
     result->codeBase = code;
     result->isDLL = (old_header->FileHeader.Characteristics & IMAGE_FILE_DLL) != 0;
@@ -582,6 +711,7 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size,
     result->headers = (PIMAGE_NT_HEADERS)&((const unsigned char *)(headers))[dos_header->e_lfanew];
 
     // update position
+	result->OriginalImageBase = result->headers->OptionalHeader.ImageBase;
     result->headers->OptionalHeader.ImageBase = (uintptr_t)code;
 
     // copy sections from DLL file block to new memory location
@@ -591,9 +721,11 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size,
 
     // adjust base address of imported data
     locationDelta = (ptrdiff_t)(result->headers->OptionalHeader.ImageBase - old_header->OptionalHeader.ImageBase);
-    if (locationDelta != 0) {
+    if (locationDelta != 0) 
+	{
         result->isRelocated = PerformBaseRelocation(result, locationDelta);
-    } else {
+    } else 
+	{
         result->isRelocated = TRUE;
     }
 
@@ -601,6 +733,7 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size,
     if (!BuildImportTable(result)) {
         goto error;
     }
+
 
     // mark memory pages depending on section headers and release
     // sections that are marked as "discardable"
@@ -614,8 +747,10 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size,
     }
 
     // get entry point of loaded library
-    if (result->headers->OptionalHeader.AddressOfEntryPoint != 0) {
-        if (result->isDLL) {
+    if (result->headers->OptionalHeader.AddressOfEntryPoint != 0) 
+	{
+        if (result->isDLL) 
+		{
             DllEntryProc DllEntry = (DllEntryProc)(LPVOID)(code + result->headers->OptionalHeader.AddressOfEntryPoint);
             // notify library about attaching to process
             BOOL successfull = (*DllEntry)((HINSTANCE)code, DLL_PROCESS_ATTACH, 0);
@@ -624,10 +759,12 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size,
                 goto error;
             }
             result->initialized = TRUE;
-        } else {
+        } else 
+		{
             result->exeEntry = (ExeEntryProc)(LPVOID)(code + result->headers->OptionalHeader.AddressOfEntryPoint);
         }
-    } else {
+    } else 
+	{
         result->exeEntry = NULL;
     }
 
@@ -730,15 +867,40 @@ void MemoryFreeLibrary(HMEMORYMODULE mod)
     HeapFree(GetProcessHeap(), 0, module);
 }
 
-int MemoryCallEntryPoint(HMEMORYMODULE mod)
+int MemoryCallEntryPoint(HMEMORYMODULE mod, MEMORYMODULE_START_ARGS *startArgs)
 {
     PMEMORYMODULE module = (PMEMORYMODULE)mod;
+	if(module == NULL) printf("1");
+	if( module->isDLL) printf("2");
+	if(module->exeEntry == NULL) printf("3");
+	if(!module->isRelocated) printf("4");
 
-    if (module == NULL || module->isDLL || module->exeEntry == NULL || !module->isRelocated) {
+	
+    if (module == NULL || module->isDLL || module->exeEntry == NULL || !module->isRelocated) 
+	{
         return -1;
     }
 
-    return module->exeEntry();
+	startArgs->_ModuleHandle = mod;
+	if(startArgs->EntryPoint == NULL)
+	{
+		startArgs->EntryPoint = module->exeEntry;
+	}
+
+	if(startArgs->InThread)
+	{
+		HANDLE hThread = CreateThread(NULL, NULL, (LPTHREAD_START_ROUTINE)MemoryModuleExecuteCode, startArgs, NULL, NULL);
+		return (hThread == INVALID_HANDLE_VALUE);
+	}
+
+	MemoryModuleExecuteCode(startArgs);
+	return 0;
+}
+
+int MemoryExecutableRunOnThread(HMEMORYMODULE mod, MEMORYMODULE_START_ARGS *startArgs)
+{
+	HANDLE res = CreateThread(NULL, NULL, (LPTHREAD_START_ROUTINE)MemoryModuleExecuteCode, startArgs, NULL, NULL);
+	return (res != NULL);
 }
 
 #define DEFAULT_LANGUAGE        MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL)
@@ -971,4 +1133,23 @@ MemoryLoadStringEx(HMEMORYMODULE module, UINT id, LPTSTR buffer, int maxsize, WO
     wcstombs(buffer, data->NameString, size);
 #endif
     return size;
+}
+
+
+void MemoryModuleExecuteCode(MEMORYMODULE_START_ARGS *startArgs)
+{
+	PEB32* ThreadPEB = (PEB32*)GetThreadPEB();
+	RTL_USER_PROCESS_PARAMETERS_MEMMODULE *CustomProcessParameters = (RTL_USER_PROCESS_PARAMETERS_MEMMODULE*)
+																		LocalAlloc(NULL, sizeof(RTL_USER_PROCESS_PARAMETERS_MEMMODULE));
+
+	memcpy(CustomProcessParameters, ThreadPEB->ProcessParameters, sizeof(RTL_USER_PROCESS_PARAMETERS));
+
+	CustomProcessParameters->CommandLine.Length = lstrlenW(startArgs->CommandLine);
+	CustomProcessParameters->CommandLine.MaximumLength = ThreadPEB->ProcessParameters->CommandLine.Length;
+	CustomProcessParameters->CommandLine.Buffer = startArgs->CommandLine;
+	CustomProcessParameters->ExSign = 0xFFFFACAC;
+	CustomProcessParameters->MemModule = startArgs->_ModuleHandle;
+	ThreadPEB->ProcessParameters = (RTL_USER_PROCESS_PARAMETERS*)CustomProcessParameters;
+
+	((ExeEntryProc)startArgs->EntryPoint)();
 }
