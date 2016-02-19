@@ -1,29 +1,58 @@
 MemoryModule
 ============
 
-Функции, которые используются для загрузки модулей (LoadLibrary, LoadLibraryEx) не поддерживают загрузку модулей из памяти.
-Данный модуль реализует данную функцию.
+The Windows API functions such as `LoadLibrary` and `LoadLibraryEx` doesn't allow to load modules from memory.
+This project implements it.
 
-Основа была взята с репозитария: https://github.com/fancycode/MemoryModule
+The base project is located at: https://github.com/fancycode/MemoryModule
+
+Currently there are changes in progress which would allow to start EXE files from memory.
+
+Change log:
+---
+**15.02.16** - Implemented command line arguments support before `EntryPoint` execution.
+The thread running inside MemoryModule is marked with custom `ProcessParameters` from `_PEB`.
+Hooks were implemented (using import method) to isolate important functions from the main process.
+!The module cannot be seen in the process module list!
+
+**16.02.16** - Some TLS fixes.
+
+**19.02.16** - `TryFreeMem` function was introduced along with `bForceMemFree` flag to force free memory which is already allocated.
+!Use this only if you don't need the functionality of the main process, because of possible errors!
+
+Issues:
+---
+1. When the `.reloc` table is missing and is impossible to allocate memory at `ImageBase` the module cannot be started.
+
+
+-------
+По-русски:
+---
+Функции, которые используются для загрузки модулей (`LoadLibrary`, `LoadLibraryEx`) не поддерживают загрузку модулей из памяти.
+Данный модуль реализует эту функцию.
+
+Основа была взята с репозитория: https://github.com/fancycode/MemoryModule
 
 Вносятся правки которые позволяют полноценно запускать EXE из памяти.
 
 История:
-
-15.02.16 - Реализована возможность указания командной строки перед запуском EntryPoint.
-Поток, исполняющийся внутри MemoryModule маркируется изменением значения ProcessParameters в _PEB.
+---
+**15.02.16** - Реализована возможность указания командной строки перед запуском `EntryPoint`.
+Поток, исполняющийся внутри MemoryModule маркируется изменением значения `ProcessParameters` в `_PEB`.
 Производится перехват (методом импорта) некоторых важных функций для изоляции от основного процесса.
 !Модуль не учитывается в списке модулей процесса!
 
-16.02.16 - Некоторые фиксы в TLS.
+**16.02.16** - Некоторые фиксы в TLS.
 
-19.02.16 - Введена функция TryFreeMem и флаг bForceMemFree для "насильного" освобождения памяти в случае её занятости.
+**19.02.16** - Введена функция `TryFreeMem` и флаг `bForceMemFree` для "насильного" освобождения памяти в случае её занятости.
 !Использовать, только если основной процесс больше не будет использоваться, иначе могут быть ошибки!
 
 Проблемы:
-1. При отсутствии таблицы .reloc и невозможности выделить нужную память по ImageBase запуск модуля становится невозможным. 
+---
+1. При отсутствии таблицы `.reloc` и невозможности выделить нужную память по `ImageBase` запуск модуля становится невозможным. 
 
-Пример запуска:
+Usage sample / Пример запуска:
+---
 ```cpp
 	wchar_t ModuleName[64+1];
 	memset(ModuleName, 0x00, (64+1)*2);
