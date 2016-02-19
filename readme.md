@@ -24,7 +24,7 @@ MemoryModule
 1. При отсутствии таблицы .reloc и невозможности выделить нужную память по ImageBase запуск модуля становится невозможным. 
 
 Пример запуска:
-
+```cpp
 	wchar_t ModuleName[64+1];
 	memset(ModuleName, 0x00, (64+1)*2);
 
@@ -49,3 +49,4 @@ MemoryModule
 	moduleStartArgs.CommandLine = CommandLine;	// CommandLine
 	moduleStartArgs.InThread = true;		// Run in new thread
 	MemoryCallEntryPoint(hM, &moduleStartArgs);	// CALL
+```
