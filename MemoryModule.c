@@ -860,12 +860,7 @@ void MemoryFreeLibrary(HMEMORYMODULE mod)
 int MemoryCallEntryPoint(HMEMORYMODULE mod, MEMORYMODULE_START_ARGS *startArgs)
 {
     PMEMORYMODULE module = (PMEMORYMODULE)mod;
-	if(module == NULL) printf("1");
-	if( module->isDLL) printf("2");
-	if(module->exeEntry == NULL) printf("3");
-	if(!module->isRelocated) printf("4");
-
-	
+   
     if (module == NULL || module->isDLL || module->exeEntry == NULL || !module->isRelocated) 
 	{
         return -1;
@@ -1988,11 +1983,6 @@ void MemoryFreeLibrary(HMEMORYMODULE mod)
 int MemoryCallEntryPoint(HMEMORYMODULE mod, MEMORYMODULE_START_ARGS *startArgs)
 {
     PMEMORYMODULE module = (PMEMORYMODULE)mod;
-	if(module == NULL) printf("1");
-	if( module->isDLL) printf("2");
-	if(module->exeEntry == NULL) printf("3");
-	if(!module->isRelocated) printf("4");
-
 	
     if (module == NULL || module->isDLL || module->exeEntry == NULL || !module->isRelocated) 
 	{
