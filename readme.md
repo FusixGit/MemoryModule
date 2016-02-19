@@ -25,25 +25,30 @@ MemoryModule
 
 Пример запуска:
 
-HRSRC hResInfo = FindResource(GetModuleHandle(NULL), MAKEINTRESOURCE(IDR_EXE1), RT_RCDATA);
-	HGLOBAL hRes = LoadResource(GetModuleHandle(NULL), hResInfo);
+void RunBinary()
+{
+	wchar_t ModuleName[64+1];
+	memset(ModuleName, 0x00, 64+1);
+
+	GetModuleFileNameW(NULL, ModuleName, 64);
+
+	HMODULE hThisModule = GetModuleHandle(L"MyDllOrExe.dll");
+
+	HRSRC hResInfo = FindResource(hThisModule, MAKEINTRESOURCE(IDR_EXE1), RT_RCDATA);
+	HGLOBAL hRes = LoadResource(hThisModule, hResInfo);
 	char *resData = (char*)LockResource(hRes);
+
 	IMAGE_DOS_HEADER *hDOS = (IMAGE_DOS_HEADER*)resData;
 	IMAGE_NT_HEADERS32 *hNT = (IMAGE_NT_HEADERS32*)(resData+hDOS->e_lfanew);
 
 	HMEMORYMODULE hM = MemoryLoadLibrary(resData, hNT->OptionalHeader.SizeOfImage, true);
-	
-	hResInfo = FindResource(GetModuleHandle(NULL), MAKEINTRESOURCE(IDR_PARAMS1), RT_RCDATA);
-	hRes = LoadResource(GetModuleHandle(NULL), hResInfo);
+	hResInfo = FindResource(hThisModule, MAKEINTRESOURCE(IDR_PARAMS1), RT_RCDATA);
+	hRes = LoadResource(hThisModule, hResInfo);
 	wchar_t *CommandLine = (wchar_t*)LockResource(hRes);
 
-	MEMORYMODULE_START_ARGS moduleStartArgs;
-	moduleStartArgs.EntryPoint = NULL;
-	moduleStartArgs.CommandLine = CommandLine;
-	moduleStartArgs.InThread = true;
-	MemoryCallEntryPoint(hM, &moduleStartArgs);
-
-	while(1)
-	{
-		Sleep(1000);
-	}
+	MEMORYMODULE_START_ARGS moduleStartArgs;	// Startup struct
+	moduleStartArgs.EntryPoint = NULL;		// Start func address. If NULL - is EntryPoint
+	moduleStartArgs.CommandLine = CommandLine;	// CommandLine
+	moduleStartArgs.InThread = true;		// Run in new thread
+	MemoryCallEntryPoint(hM, &moduleStartArgs);	// CALL
+}
