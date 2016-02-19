@@ -25,10 +25,8 @@ MemoryModule
 
 Пример запуска:
 
-void RunBinary()
-{
 	wchar_t ModuleName[64+1];
-	memset(ModuleName, 0x00, 64+1);
+	memset(ModuleName, 0x00, (64+1)*2);
 
 	GetModuleFileNameW(NULL, ModuleName, 64);
 
@@ -51,4 +49,3 @@ void RunBinary()
 	moduleStartArgs.CommandLine = CommandLine;	// CommandLine
 	moduleStartArgs.InThread = true;		// Run in new thread
 	MemoryCallEntryPoint(hM, &moduleStartArgs);	// CALL
-}
